@@ -1,10 +1,9 @@
 import "dotenv/config";
 import { app } from "./app";
 import { startBillingScheduler } from "./workers/billingScheduler";
+import { startKeepalive } from "./utils/keepalive";
 
-// Importing billingWorker is a side-effect — it registers the BullMQ Worker
-// that processes retry-charge jobs. Without this import the jobs queue but
-// nothing ever picks them up.
+// Side-effect import — registers the BullMQ Worker for dunning retry jobs
 import "./workers/billingWorker";
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -15,4 +14,5 @@ app.listen(PORT, () => {
   console.log(`❤️  Health:   http://localhost:${PORT}/health\n`);
 
   startBillingScheduler();
+  startKeepalive(); // keeps Render free tier awake so webhooks always land
 });
