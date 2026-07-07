@@ -103,4 +103,35 @@ router.get("/complete", async (req, res) => {
   }
 });
 
+
+
+// GET /v1/checkout/status?orderReference=xxx
+// Called by tenant frontends after customer returns from Nomba checkout
+router.get("/status", requireTenant, async (req: AuthedRequest, res) => {
+  const orderReference = req.query.orderReference as string;
+  if (!orderReference) {
+    return res.status(400).json({ error: "orderReference is required" });
+  }
+
+  const attempt = await db.chargeAttempt.findUnique({
+    where: { orderReference },
+    include: {
+      invoice: { include: { subscription: true } },
+    },
+  });
+
+  if (!attempt) return res.status(404).json({ error: "Order not found" });
+
+  res.json({
+    orderReference,
+    paid: attempt.invoice.status === "paid",
+    invoiceStatus: attempt.invoice.status,
+    subscriptionStatus: attempt.invoice.subscription.status,
+    subscriptionId: attempt.invoice.subscriptionId,
+  });
+});
+
+
+
+
 export default router;

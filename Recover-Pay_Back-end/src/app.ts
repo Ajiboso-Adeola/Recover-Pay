@@ -5,8 +5,22 @@ import subscriptionsRouter from "./routes/subscriptions";
 import portalRouter from "./routes/portal";
 import webhooksRouter from "./routes/webhooks";
 import { mountSwagger } from "./swagger";
+import authRouter from "./routes/authRoutes";
+import cors from "cors";
+
 
 export const app = express();
+
+app.use(cors({
+  origin: [
+    "http://localhost:3001",          // Next.js dev server
+    process.env.FRONTEND_URL || "*",  // Production frontend URL
+  ],
+  credentials: true,
+}));
+
+
+app.use("/v1/auth", authRouter);
 
 // Global JSON parser — webhooks.ts adds its own express.json() per-route
 // so this doesn't conflict with anything
