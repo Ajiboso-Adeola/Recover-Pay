@@ -12,13 +12,9 @@ import cors from "cors";
 export const app = express();
 
 app.use(cors({
-  origin: [
-    "http://localhost:3001",          // Next.js dev server
-    process.env.FRONTEND_URL || "*",  // Production frontend URL
-  ],
+  origin: ["http://localhost:3001", process.env.FRONTEND_URL || ""],
   credentials: true,
 }));
-
 
 app.use("/v1/auth", authRouter);
 
