@@ -11,7 +11,6 @@ export default function SignUpPage() {
         </div>
         <span className="font-bold text-white text-lg">RecoverPay</span>
       </Link>
-
       <SignUp
         appearance={{
           elements: {
@@ -19,10 +18,8 @@ export default function SignUpPage() {
             card: "bg-[#0F1E35] border border-slate-700 shadow-2xl rounded-2xl",
             headerTitle: "text-white font-bold",
             headerSubtitle: "text-slate-400",
-            formButtonPrimary:
-              "bg-amber-500 hover:bg-amber-400 text-white font-semibold transition-colors",
-            formFieldInput:
-              "bg-[#0B1426] border-slate-700 text-white placeholder-slate-500 focus:border-amber-500",
+            formButtonPrimary: "bg-amber-500 hover:bg-amber-400 text-white font-semibold transition-colors",
+            formFieldInput: "bg-[#0B1426] border-slate-700 text-white placeholder-slate-500 focus:border-amber-500",
             formFieldLabel: "text-slate-300",
             footerActionLink: "text-amber-400 hover:text-amber-300",
           },

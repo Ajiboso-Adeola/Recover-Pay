@@ -1,10 +1,9 @@
+// src/workers/billingWorker.ts
+// Dunning worker using TENANT's own Nomba credentials
+
 import { Queue, Worker } from "bullmq";
-import { redisConnection, bullMQConnection } from "../redis";
-import {
-  chargeTokenizedCard,
-  verifyTransaction,
-  createVirtualAccount,
-} from "../nomba/nombaClient";
+import { bullMQConnection } from "../redis";
+import { getTenantNombaClient } from "../nomba/nombaClient";
 import { notifyCustomer } from "../services/notificationService";
 import { db } from "../prisma/client";
 import crypto from "crypto";
@@ -13,30 +12,25 @@ export const billingQueue = new Queue("billing", {
   connection: bullMQConnection,
 });
 
-// Called by billingService when the first charge attempt fails.
-// Schedules 3 retry jobs: attempt 1 at 24h, attempt 2 at 72h, attempt 3 at 7d.
-// Attempt 3 switches from card retry to virtual account fallback.
 export async function scheduleDunning(invoiceId: string) {
   await billingQueue.add(
     "retry-charge",
     { invoiceId, attempt: 1 },
-    { delay: 86_400_000 }    // 24 hours
+    { delay: 86_400_000 },
   );
   await billingQueue.add(
     "retry-charge",
     { invoiceId, attempt: 2 },
-    { delay: 259_200_000 }   // 72 hours
+    { delay: 259_200_000 },
   );
   await billingQueue.add(
     "retry-charge",
     { invoiceId, attempt: 3 },
-    { delay: 604_800_000 }   // 7 days → switches to virtual account
+    { delay: 604_800_000 },
   );
-
   console.log(`[dunning] Scheduled 3 retry attempts for invoice ${invoiceId}`);
 }
 
-// ─── Worker ───────────────────────────────────────────────────────────────────
 new Worker(
   "billing",
   async (job) => {
@@ -46,36 +40,51 @@ new Worker(
       where: { id: invoiceId },
       include: {
         subscription: {
-          include: { customer: true, plan: true },
+          include: {
+            customer: true,
+            plan: { include: { tenant: true } },
+          },
         },
       },
     });
 
-    if (!invoice) return;
-    if (invoice.status === "paid") return; // already recovered by another path
-
+    if (!invoice || invoice.status === "paid") return;
     const sub = invoice.subscription;
     if (sub.status === "cancelled") return;
 
+    // Get THIS tenant's Nomba client
+    const nombaClient = await getTenantNombaClient(sub.plan.tenantId).catch(
+      (err) => {
+        console.error(
+          `[dunning] Cannot get Nomba client for tenant ${sub.plan.tenantId}:`,
+          err.message,
+        );
+        return null;
+      },
+    );
+
+    if (!nombaClient) return;
+
     if (attempt < 3) {
-      await retryCard(invoice, sub, attempt);
+      await retryCard(invoice, sub, attempt, nombaClient);
     } else {
-      await fallbackToVirtualAccount(invoice, sub);
+      await fallbackToVirtualAccount(invoice, sub, nombaClient);
     }
   },
-  { connection: bullMQConnection }
+  { connection: bullMQConnection },
 );
 
-// ─── Card retry (attempts 1 and 2) ───────────────────────────────────────────
-async function retryCard(invoice: any, sub: any, attempt: number) {
-  if (!sub.customer.tokenKey) {
-    console.warn(`[dunning] No tokenKey for customer ${sub.customer.id} — skipping card retry`);
-    return;
-  }
+async function retryCard(
+  invoice: any,
+  sub: any,
+  attempt: number,
+  nombaClient: any,
+) {
+  if (!sub.customer.tokenKey) return;
 
   const orderReference = `inv_${invoice.id}_retry${attempt}_${crypto.randomUUID()}`;
 
-  const result = await chargeTokenizedCard({
+  const result = await nombaClient.chargeTokenizedCard({
     orderReference,
     customerId: sub.customer.id,
     customerEmail: sub.customer.email,
@@ -92,9 +101,11 @@ async function retryCard(invoice: any, sub: any, attempt: number) {
     },
   });
 
-  const verified = await verifyTransaction({ orderReference });
+  const verified = await nombaClient.verifyTransaction({ orderReference });
+  const isSuccess =
+    verified?.data?.success === true || verified?.data?.status === "SUCCESS";
 
-  if (verified?.data?.status === "SUCCESS") {
+  if (isSuccess) {
     await db.chargeAttempt.update({
       where: { orderReference },
       data: { status: "success" },
@@ -107,14 +118,14 @@ async function retryCard(invoice: any, sub: any, attempt: number) {
       where: { id: sub.id },
       data: { status: "active", dunningAttempt: 0 },
     });
-
     await notifyCustomer({
       email: sub.customer.email,
       subject: "Payment successful",
       message: `Your payment of ₦${Number(invoice.amountDue).toLocaleString()} was successful. Your subscription is active.`,
     });
-
-    console.log(`[dunning] Attempt ${attempt} succeeded for invoice ${invoice.id}`);
+    console.log(
+      `[dunning] Attempt ${attempt} succeeded for invoice ${invoice.id}`,
+    );
   } else {
     await db.chargeAttempt.update({
       where: { orderReference },
@@ -124,30 +135,29 @@ async function retryCard(invoice: any, sub: any, attempt: number) {
       where: { id: sub.id },
       data: { dunningAttempt: attempt },
     });
-
     await notifyCustomer({
       email: sub.customer.email,
       subject: "Payment failed — we will retry",
-      message: `We couldn't charge your card for ₦${Number(invoice.amountDue).toLocaleString()}. We will try again shortly. Please ensure your card has sufficient funds.`,
+      message: `We couldn't charge your card for ₦${Number(invoice.amountDue).toLocaleString()}. We will try again shortly.`,
     });
-
-    console.warn(`[dunning] Attempt ${attempt} failed for invoice ${invoice.id}`);
+    console.warn(
+      `[dunning] Attempt ${attempt} failed for invoice ${invoice.id}`,
+    );
   }
 }
 
-// ─── Virtual account fallback (attempt 3) ────────────────────────────────────
-async function fallbackToVirtualAccount(invoice: any, sub: any) {
-  // accountRef must be 16-64 chars
+async function fallbackToVirtualAccount(
+  invoice: any,
+  sub: any,
+  nombaClient: any,
+) {
   const accountRef = `rp_va_${invoice.id}`.slice(0, 64).padEnd(16, "0");
-
-  // accountName must be 8-64 chars
   const accountName = `RecoverPay ${sub.customer.email.split("@")[0]}`
     .slice(0, 64)
     .padEnd(8, " ");
+  const expiryDate = new Date(Date.now() + 48 * 60 * 60 * 1000);
 
-  const expiryDate = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
-
-  const result = await createVirtualAccount({
+  const result = await nombaClient.createVirtualAccount({
     accountRef,
     accountName,
     expectedAmount: Number(invoice.amountDue),
@@ -180,17 +190,15 @@ async function fallbackToVirtualAccount(invoice: any, sub: any) {
 
   await notifyCustomer({
     email: sub.customer.email,
-    subject: "Action required — pay via bank transfer to keep your subscription",
+    subject: "Action required — pay via bank transfer",
     message:
-      `Your card payment of ₦${Number(invoice.amountDue).toLocaleString()} failed after multiple attempts. ` +
-      `Pay via bank transfer within 48 hours to keep your subscription active:\n\n` +
-      `Bank: ${result.data.bankName}\n` +
-      `Account Number: ${result.data.bankAccountNumber}\n` +
-      `Amount: ₦${Number(invoice.amountDue).toLocaleString()}\n\n` +
-      `Your subscription will be reactivated automatically once payment is received.`,
+      `Your card payment of ₦${Number(invoice.amountDue).toLocaleString()} failed after multiple attempts.\n\n` +
+      `Pay via bank transfer within 48 hours:\n` +
+      `Bank: ${result.data.bankName}\nAccount: ${result.data.bankAccountNumber}\n` +
+      `Amount: ₦${Number(invoice.amountDue).toLocaleString()}`,
   });
 
   console.log(
-    `[dunning] Virtual account fallback created for invoice ${invoice.id}: ${result.data.bankAccountNumber}`
+    `[dunning] VA fallback created for invoice ${invoice.id}: ${result.data.bankAccountNumber}`,
   );
 }

@@ -1,11 +1,8 @@
+// lib/api.ts
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
 
 // ─── Generic fetch wrapper ────────────────────────────────────────────────────
-async function apiFetch(
-  path: string,
-  token: string,
-  options: RequestInit = {}
-) {
+async function apiFetch(path: string, token: string, options: RequestInit = {}) {
   const res = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
@@ -14,13 +11,8 @@ async function apiFetch(
       ...(options.headers || {}),
     },
   });
-
   const data = await res.json();
-
-  if (!res.ok) {
-    throw new Error(data.error || `Request failed with status ${res.status}`);
-  }
-
+  if (!res.ok) throw new Error(data.error || `Request failed: ${res.status}`);
   return data;
 }
 
@@ -42,6 +34,35 @@ export async function updateProfile(token: string, name: string) {
     method: "PATCH",
     body: JSON.stringify({ name }),
   });
+}
+
+// ─── Nomba Config ─────────────────────────────────────────────────────────────
+export interface NombaConnectInput {
+  nombaAccountId: string;
+  nombaSubAccountId: string;
+  nombaClientId: string;
+  nombaClientSecret: string;
+  nombaWebhookSecret?: string;
+  baseUrl?: string;
+}
+
+export async function getNombaStatus(apiKey: string) {
+  return apiFetch("/v1/nomba/status", apiKey);
+}
+
+export async function connectNomba(apiKey: string, data: NombaConnectInput) {
+  return apiFetch("/v1/nomba/connect", apiKey, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function testNombaConnection(apiKey: string) {
+  return apiFetch("/v1/nomba/test", apiKey, { method: "POST" });
+}
+
+export async function disconnectNomba(apiKey: string) {
+  return apiFetch("/v1/nomba/disconnect", apiKey, { method: "DELETE" });
 }
 
 // ─── Plans ────────────────────────────────────────────────────────────────────
@@ -87,15 +108,55 @@ export interface Subscription {
   currentPeriodStart: string;
   currentPeriodEnd: string;
   nextBillingDate: string;
-  customer: { email: string; tokenKey: string | null };
+  customer: { id: string; email: string; tokenKey: string | null };
   plan: { name: string; amount: string; interval: string };
   createdAt: string;
 }
 
-export async function getSubscriptions(
-  apiKey: string,
-  status?: string
-): Promise<Subscription[]> {
+export async function getSubscriptions(apiKey: string, status?: string): Promise<Subscription[]> {
   const query = status ? `?status=${status}` : "";
   return apiFetch(`/v1/subscriptions${query}`, apiKey);
+}
+
+export async function getSubscription(apiKey: string, id: string): Promise<Subscription> {
+  return apiFetch(`/v1/subscriptions/${id}`, apiKey);
+}
+
+// ─── Transactions ─────────────────────────────────────────────────────────────
+export interface Transaction {
+  id: string;
+  orderReference: string;
+  status: string;
+  message: string | null;
+  amount: string;
+  currency: string;
+  customerEmail: string;
+  planName: string;
+  subscriptionId: string;
+  invoiceId: string;
+  createdAt: string;
+}
+
+export interface TransactionSummary {
+  totalSuccessful: number;
+  totalFailed: number;
+  totalRevenue: string;
+  activeSubscriptions: number;
+  pastDue: number;
+  recoveryRate: number;
+}
+
+export async function getTransactions(
+  apiKey: string,
+  status?: string,
+  limit = 50
+): Promise<{ transactions: Transaction[]; total: number }> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  params.set("limit", String(limit));
+  return apiFetch(`/v1/transactions?${params}`, apiKey);
+}
+
+export async function getTransactionSummary(apiKey: string): Promise<TransactionSummary> {
+  return apiFetch("/v1/transactions/summary", apiKey);
 }

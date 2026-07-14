@@ -1,3 +1,6 @@
+// src/routes/plans.ts
+// Requires Nomba credentials before creating plans
+
 import express from "express";
 import { db } from "../prisma/client";
 import { requireTenant, AuthedRequest } from "../middleware/auth";
@@ -5,8 +8,22 @@ import { requireTenant, AuthedRequest } from "../middleware/auth";
 const router = express.Router();
 router.use(requireTenant);
 
-// POST /v1/plans — create a plan
-router.post("/", async (req: AuthedRequest, res) => {
+// Check Nomba config for write operations
+async function requireNombaConfig(req: AuthedRequest, res: any, next: any) {
+  const config = await db.tenantNombaConfig.findUnique({
+    where: { tenantId: req.tenantId! },
+  });
+  if (!config || !config.verified) {
+    return res.status(400).json({
+      error: "Connect your Nomba account first.",
+      hint: "Go to Settings → Connect Nomba Account before creating plans.",
+    });
+  }
+  next();
+}
+
+// POST /v1/plans — requires Nomba config
+router.post("/", requireNombaConfig, async (req: AuthedRequest, res) => {
   const { name, amount, interval, trialDays, currency } = req.body;
 
   if (!name || amount == null || !interval) {
@@ -16,7 +33,7 @@ router.post("/", async (req: AuthedRequest, res) => {
     return res.status(400).json({ error: "interval must be monthly, annual, or custom" });
   }
   if (isNaN(Number(amount)) || Number(amount) <= 0) {
-    return res.status(400).json({ error: "amount must be a positive number (Naira, e.g. 5000)" });
+    return res.status(400).json({ error: "amount must be a positive number in Naira" });
   }
 
   const plan = await db.plan.create({
@@ -33,7 +50,7 @@ router.post("/", async (req: AuthedRequest, res) => {
   res.status(201).json(plan);
 });
 
-// GET /v1/plans — list all active plans for this tenant
+// GET /v1/plans — no Nomba config required for reads
 router.get("/", async (req: AuthedRequest, res) => {
   const plans = await db.plan.findMany({
     where: { tenantId: req.tenantId!, archived: false },
@@ -42,24 +59,15 @@ router.get("/", async (req: AuthedRequest, res) => {
   res.json(plans);
 });
 
-// GET /v1/plans/:id — get a single plan
 router.get("/:id", async (req: AuthedRequest, res) => {
-  const plan = await db.plan.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId! },
-  });
+  const plan = await db.plan.findFirst({ where: { id: req.params.id, tenantId: req.tenantId! } });
   if (!plan) return res.status(404).json({ error: "Plan not found" });
   res.json(plan);
 });
 
-// PATCH /v1/plans/:id — update name, amount, trialDays only
-// interval and currency are intentionally locked — changing them retroactively
-// would corrupt billing math for subscriptions already running on this plan
 router.patch("/:id", async (req: AuthedRequest, res) => {
-  const plan = await db.plan.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId! },
-  });
+  const plan = await db.plan.findFirst({ where: { id: req.params.id, tenantId: req.tenantId! } });
   if (!plan) return res.status(404).json({ error: "Plan not found" });
-
   const { name, amount, trialDays } = req.body;
   const updated = await db.plan.update({
     where: { id: plan.id },
@@ -72,13 +80,9 @@ router.patch("/:id", async (req: AuthedRequest, res) => {
   res.json(updated);
 });
 
-// DELETE /v1/plans/:id — soft delete (archive)
 router.delete("/:id", async (req: AuthedRequest, res) => {
-  const plan = await db.plan.findFirst({
-    where: { id: req.params.id, tenantId: req.tenantId! },
-  });
+  const plan = await db.plan.findFirst({ where: { id: req.params.id, tenantId: req.tenantId! } });
   if (!plan) return res.status(404).json({ error: "Plan not found" });
-
   await db.plan.update({ where: { id: plan.id }, data: { archived: true } });
   res.status(204).send();
 });

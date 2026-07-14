@@ -1,10 +1,11 @@
+// src/services/billingService.ts
+// Uses TENANT's own Nomba credentials for all charges
+
 import { db } from "../prisma/client";
-import { chargeTokenizedCard, verifyTransaction } from "../nomba/nombaClient";
+import { getTenantNombaClient } from "../nomba/nombaClient";
 import { addInterval } from "../utils/dates";
 import crypto from "crypto";
 
-// scheduleDunning is imported lazily inside the function to avoid a circular
-// dependency between billingService ↔ billingWorker at module load time.
 async function getDunningScheduler() {
   const { scheduleDunning } = await import("../workers/billingWorker");
   return scheduleDunning;
@@ -13,7 +14,10 @@ async function getDunningScheduler() {
 export async function chargeSubscriptionCycle(subscriptionId: string) {
   const sub = await db.subscription.findUnique({
     where: { id: subscriptionId },
-    include: { customer: true, plan: true },
+    include: {
+      customer: true,
+      plan: { include: { tenant: true } },
+    },
   });
 
   if (!sub) throw new Error("Subscription not found");
@@ -21,7 +25,7 @@ export async function chargeSubscriptionCycle(subscriptionId: string) {
     throw new Error(`Cannot charge a ${sub.status} subscription`);
   }
 
-  // Prevent double-billing if this cycle's invoice already exists
+  // Prevent double-billing
   const existingOpen = await db.invoice.findFirst({
     where: { subscriptionId, status: { in: ["open", "draft"] } },
   });
@@ -41,16 +45,20 @@ export async function chargeSubscriptionCycle(subscriptionId: string) {
   });
 
   if (!sub.customer.tokenKey) {
-    await db.subscription.update({
-      where: { id: sub.id },
-      data: { status: "past_due" },
-    });
+    await db.subscription.update({ where: { id: sub.id }, data: { status: "past_due" } });
     return { invoice, charged: false, reason: "no saved card on file" };
+  }
+
+  // Get THIS TENANT's Nomba client
+  const nombaClient = await getTenantNombaClient(sub.plan.tenantId).catch(() => null);
+  if (!nombaClient) {
+    await db.subscription.update({ where: { id: sub.id }, data: { status: "past_due" } });
+    return { invoice, charged: false, reason: "tenant Nomba credentials not configured" };
   }
 
   const orderReference = `inv_${invoice.id}_${crypto.randomUUID()}`;
 
-  const result = await chargeTokenizedCard({
+  const result = await nombaClient.chargeTokenizedCard({
     orderReference,
     customerId: sub.customer.id,
     customerEmail: sub.customer.email,
@@ -67,9 +75,9 @@ export async function chargeSubscriptionCycle(subscriptionId: string) {
     },
   });
 
-  const verified = await verifyTransaction({ orderReference });
+  const verified = await nombaClient.verifyTransaction({ orderReference });
 
-  if (verified?.data?.status === "SUCCESS") {
+  if (verified?.data?.success === true || verified?.data?.status === "SUCCESS") {
     const nextStart = sub.currentPeriodEnd;
     const nextEnd = addInterval(nextStart, sub.plan.interval);
 
@@ -91,15 +99,11 @@ export async function chargeSubscriptionCycle(subscriptionId: string) {
         nextBillingDate: nextEnd,
       },
     });
-
     return { invoice, charged: true };
   }
 
-  // First attempt failed — hand off to the dunning engine
-  await db.chargeAttempt.update({
-    where: { orderReference },
-    data: { status: "failed" },
-  });
+  // First attempt failed — start dunning
+  await db.chargeAttempt.update({ where: { orderReference }, data: { status: "failed" } });
   await db.subscription.update({
     where: { id: sub.id },
     data: { status: "past_due", dunningAttempt: 1 },

@@ -1,7 +1,22 @@
 .next/
 node_modules/
+.env.local
+.env.example
+.npm-cache/
 .env
 *.log
 .DS_Store
 out/
 dist/
+build/
+.cache/
+.cache-loader/
+parcel-cache/
+
+# Package manager caches
+.pnp.*
+.pnpm-debug.log
+
+# Misc caches
+.eslintcache
+.cache

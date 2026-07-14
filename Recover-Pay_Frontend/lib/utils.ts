@@ -23,7 +23,7 @@ export function formatDate(dateString: string): string {
 
 export function maskApiKey(key: string): string {
   if (!key) return "";
-  const prefix = key.substring(0, 10); // rp_sk_xxxx
+  const prefix = key.substring(0, 10);
   return `${prefix}${"•".repeat(20)}${key.slice(-4)}`;
 }
 

@@ -1,3 +1,4 @@
+// src/workers/billingScheduler.ts
 import { Queue, Worker } from "bullmq";
 import { bullMQConnection } from "../redis";
 import { db } from "../prisma/client";
@@ -9,21 +10,18 @@ export const schedulerQueue = new Queue("billing-scheduler", {
 
 export async function startBillingScheduler() {
   const interval =
-    Number(process.env.BILLING_CYCLE_INTERVAL_MS) || 60 * 60 * 1000; // 1 hour default
+    Number(process.env.BILLING_CYCLE_INTERVAL_MS) || 60 * 60 * 1000;
 
-  // jobId is fixed so restarts don't create duplicate repeatable jobs
   await schedulerQueue.add(
     "run-billing-cycle",
     {},
     {
       repeat: { every: interval },
       jobId: "billing-cycle-cron",
-    }
+    },
   );
 
-  console.log(
-    `[scheduler] Billing cycle scheduled every ${interval / 1000}s`
-  );
+  console.log(`[scheduler] Billing cycle scheduled every ${interval / 1000}s`);
 }
 
 new Worker(
@@ -33,8 +31,6 @@ new Worker(
 
     const due = await db.subscription.findMany({
       where: {
-        // active = normal recurring charge
-        // trialing = trial just ended, this is the first real charge
         status: { in: ["active", "trialing"] },
         nextBillingDate: { lte: now },
       },
@@ -46,10 +42,9 @@ new Worker(
       try {
         await chargeSubscriptionCycle(sub.id);
       } catch (err) {
-        // One bad subscription must not block the rest of the batch
         console.error(`[scheduler] Failed on subscription ${sub.id}:`, err);
       }
     }
   },
-  { connection: bullMQConnection }
+  { connection: bullMQConnection },
 );

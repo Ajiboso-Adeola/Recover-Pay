@@ -1,5 +1,6 @@
+// src/middleware/clerkAuth.ts
 import { Request, Response, NextFunction } from "express";
-import { createClerkClient } from "@clerk/backend";
+import { createClerkClient, verifyToken } from "@clerk/backend";
 
 export interface ClerkAuthRequest extends Request {
   clerkUser?: {
@@ -16,7 +17,7 @@ const clerk = createClerkClient({
 export async function requireClerkAuth(
   req: ClerkAuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   const token = req.header("Authorization")?.replace("Bearer ", "").trim();
 
@@ -25,13 +26,19 @@ export async function requireClerkAuth(
   }
 
   try {
-    const payload = await clerk.verifyToken(token);
+    const payload = await verifyToken(token, {
+      secretKey: process.env.CLERK_SECRET_KEY,
+    });
     const clerkUserId = payload.sub;
 
-    // Get user details from Clerk
+    if (!clerkUserId) {
+      return res.status(401).json({ error: "Token has no subject" });
+    }
+
     const user = await clerk.users.getUser(clerkUserId);
     const email = user.emailAddresses[0]?.emailAddress || "";
-    const name = [user.firstName, user.lastName].filter(Boolean).join(" ") || email;
+    const name =
+      [user.firstName, user.lastName].filter(Boolean).join(" ") || email;
 
     req.clerkUser = { clerkUserId, email, name };
     next();

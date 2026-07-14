@@ -1,16 +1,16 @@
-// src/redis.ts
 import Redis from "ioredis";
 
-// For general use — token caching in nombaClient.ts
+// General Redis connection — used for token caching in nombaClient.ts
 export const redisConnection = new Redis(process.env.REDIS_URL!, {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
 });
 
-// For BullMQ Queue and Worker — must be options object, not Redis instance
+// BullMQ requires a connection options object, not a Redis instance
+// Use this for all Queue and Worker constructors
 export const bullMQConnection = {
   url: process.env.REDIS_URL!,
-  maxRetriesPerRequest: null as null,  // "as null" keeps TypeScript happy
+  maxRetriesPerRequest: null as null,
   enableReadyCheck: false,
 };
 

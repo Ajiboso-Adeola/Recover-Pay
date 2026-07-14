@@ -3,19 +3,26 @@ import { PrismaClient } from "@prisma/client";
 const db = new PrismaClient();
 
 async function main() {
+  // Upsert matches on apiKey — safe to run multiple times
   const tenant = await db.tenant.upsert({
     where: { apiKey: "rp_test_demo_key_123456" },
     update: {},
     create: {
       name: "RecoverPay Demo",
       apiKey: "rp_test_demo_key_123456",
+      plan: "free",
+      planActive: true,
     },
   });
 
-  console.log("✅ Demo tenant ready:", tenant.name);
-  console.log("\n--- Use this in your API requests ---");
-  console.log("Header: Authorization: Bearer rp_test_demo_key_123456");
-  console.log("-------------------------------------\n");
+  console.log("\n✅ Demo tenant ready");
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(`Tenant ID : ${tenant.id}`);
+  console.log(`API Key   : ${tenant.apiKey}`);
+  console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log("\nNext step: Connect your Nomba account");
+  console.log("  POST /v1/nomba/connect with your credentials");
+  console.log("  (Required before creating plans)\n");
 }
 
 main()

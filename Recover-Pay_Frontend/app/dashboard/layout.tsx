@@ -1,26 +1,18 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import Sidebar from "@/components/dashboard/Sidebar";
 
-export default async function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const { userId, getToken } = await auth();
   if (!userId) redirect("/sign-in");
 
-  // On every dashboard load, ensure this Clerk user has a Tenant record.
-  // The register endpoint is idempotent — safe to call every time.
+  // Register tenant on every dashboard load (idempotent — safe to call repeatedly)
   const token = await getToken();
   if (token) {
     try {
       await fetch(`${process.env.NEXT_PUBLIC_API_URL}/v1/auth/register`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         cache: "no-store",
       });
     } catch {
@@ -31,8 +23,6 @@ export default async function DashboardLayout({
   return (
     <div className="min-h-screen bg-slate-50 flex">
       <Sidebar />
-
-      {/* Main content — offset by sidebar width */}
       <main className="flex-1 ml-64 min-h-screen">
         <div className="max-w-6xl mx-auto px-8 py-8">{children}</div>
       </main>
